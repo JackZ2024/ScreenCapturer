@@ -287,6 +287,7 @@
 <context>
     <name>UpdatePrompt</name>
     <message><source>Software Update</source><translation>软件更新</translation></message>
+    <message><source>Update complete. ScreenCapturer has restarted.</source><translation>更新完成。ScreenCapturer 已重新启动。</translation></message>
     <message><source>Version %1 is available. You are using %2.</source><translation>新版本 %1 已发布，当前版本为 %2。</translation></message>
     <message><source>Update</source><translation>更新</translation></message>
     <message><source>Updates are unavailable in this build.</source><translation>此构建未配置软件更新。</translation></message>
@@ -297,7 +298,18 @@
     <message><source>Version %1 has no verifiable installer for this computer.</source><translation>版本 %1 没有适用于此电脑且可校验的安装包。</translation></message>
     <message><source>Could not create a folder for the update.</source><translation>无法创建更新目录。</translation></message>
     <message><source>Version %1 has no verifiable ZIP package for this computer.</source><translation>版本 %1 没有适用于此电脑且可校验的 ZIP 包。</translation></message>
-    <message><source>Extract an official portable ZIP before using automatic updates.</source><translation>请先解压官方发布的便携版 ZIP，再使用自动更新。</translation></message>
+    <message>
+        <source>Automatic updates require these missing files in the application folder.
+
+%1
+
+%2</source>
+        <translation>自动更新需要下列文件，但在当前程序目录里没有找到。
+
+%1
+
+%2</translation>
+    </message>
     <message><source>Could not create the ZIP file.</source><translation>无法创建 ZIP 文件。</translation></message>
     <message><source>Downloading update…</source><translation>正在下载更新…</translation></message>
     <message><source>Cancel</source><translation>取消</translation></message>

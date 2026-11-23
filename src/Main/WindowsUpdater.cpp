@@ -19,6 +19,7 @@
 #include <QNetworkReply>
 #include <QPointer>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QProgressDialog>
 #include <QRegularExpression>
 #include <QSysInfo>
@@ -192,8 +193,14 @@ private:
 
     void download(const Release &release)
     {
-        if (!installDir_.exists(helperName) || !installDir_.exists(manifestName)) {
-            showMessage(UpdatePrompt::tr("Extract an official portable ZIP before using automatic updates."));
+        QStringList missingFiles;
+        for (const auto *name : {helperName, manifestName}) {
+            if (!QFileInfo(installDir_.filePath(name)).isFile()) missingFiles.append(QString::fromLatin1(name));
+        }
+        if (!missingFiles.isEmpty()) {
+            showMessage(UpdatePrompt::tr("Automatic updates require these missing files in the application folder.\n\n"
+                                         "%1\n\n%2")
+                            .arg(QDir::toNativeSeparators(installDir_.absolutePath()), missingFiles.join(u'\n')));
             return;
         }
         stage_ = std::make_unique<QTemporaryDir>(installDir_.filePath(".screencapturer-update-XXXXXX"));
@@ -287,7 +294,16 @@ private:
             }
             const QStringList arguments{QStringLiteral("--apply"), root, stage,
                                         QString::number(QCoreApplication::applicationPid())};
-            if (!QProcess::startDetached(helper, arguments, stage_->path())) {
+            QProcess applyProcess;
+            applyProcess.setProgram(helper);
+            applyProcess.setArguments(arguments);
+            applyProcess.setWorkingDirectory(stage_->path());
+            auto environment = QProcessEnvironment::systemEnvironment();
+            environment.insert(QStringLiteral("SCREENCAPTURER_UPDATE_TITLE"), UpdatePrompt::tr("Software Update"));
+            environment.insert(QStringLiteral("SCREENCAPTURER_UPDATE_COMPLETE"),
+                               UpdatePrompt::tr("Update complete. ScreenCapturer has restarted."));
+            applyProcess.setProcessEnvironment(environment);
+            if (!applyProcess.startDetached()) {
                 finishPreparation(UpdatePrompt::tr("Could not start the update assistant."));
                 return;
             }

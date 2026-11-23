@@ -113,7 +113,7 @@ void validatePayload(const fs::path &payload, const Manifest &files)
         const auto key = fileKey(name);
         if (pathKind(entry.path()) == PathKind::Directory) continue;
         if (!files.contains(key) || files.at(key).generic_string() != name)
-            throw std::runtime_error("The ZIP contains a file outside its manifest.");
+            throw std::runtime_error("The ZIP contains a file outside its manifest: " + name);
         ++found;
     }
     if (found != files.size()) throw std::runtime_error("The ZIP is missing files from its manifest.");
@@ -308,6 +308,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
             const auto processId = std::wcstoul(args[4], &end, 10);
             if (!processId || *end) throw std::runtime_error("Invalid application process ID.");
             apply(root, stage, processId);
+            wchar_t title[128];
+            wchar_t message[256];
+            const auto titleLength = GetEnvironmentVariableW(L"SCREENCAPTURER_UPDATE_TITLE", title, 128);
+            const auto messageLength = GetEnvironmentVariableW(L"SCREENCAPTURER_UPDATE_COMPLETE", message, 256);
+            MessageBoxW(nullptr,
+                        messageLength && messageLength < 256 ? message : L"Update complete. ScreenCapturer has restarted.",
+                        titleLength && titleLength < 128 ? title : L"ScreenCapturer Update",
+                        MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND);
         }
         result = 0;
     } catch (const std::exception &error) {
