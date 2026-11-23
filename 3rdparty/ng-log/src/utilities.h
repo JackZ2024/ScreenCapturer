@@ -1,0 +1,279 @@
+// SPDX-FileCopyrightText: 2008-2024 Google Inc.
+// SPDX-FileCopyrightText: 2026 The ng-log contributors
+//
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// Author: Shinichiro Hamaji
+//         Sergiu Deitsch
+//
+// Define utilities for glog internal usage.
+
+#ifndef NGLOG_INTERNAL_UTILITIES_H
+#define NGLOG_INTERNAL_UTILITIES_H
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <memory>
+#include <regex>
+#include <string>
+#include <type_traits>
+#include <utility>
+
+// printf macros for size_t, in the style of inttypes.h
+#ifdef _LP64
+#  define __PRIS_PREFIX "z"
+#else
+#  define __PRIS_PREFIX
+#endif
+
+// Use these macros after a % in a printf format string
+// to get correct 32/64 bit behavior, like this:
+// size_t size = records.size();
+// printf("%"PRIuS"\n", size);
+
+#define PRIdS __PRIS_PREFIX "d"
+#define PRIxS __PRIS_PREFIX "x"
+#define PRIuS __PRIS_PREFIX "u"
+#define PRIXS __PRIS_PREFIX "X"
+#define PRIoS __PRIS_PREFIX "o"
+
+#include "config.h"
+#include "ng-log/platform.h"
+#if defined(NGLOG_OS_WINDOWS)
+#  include "port.h"
+#endif
+#if defined(HAVE_UNISTD_H)
+#  include <unistd.h>
+#endif
+#if !defined(HAVE_SSIZE_T)
+#  if defined(NGLOG_OS_WINDOWS)
+#    include <basetsd.h>
+using ssize_t = SSIZE_T;
+#  else
+using ssize_t = std::ptrdiff_t;
+#  endif
+#endif
+#include "ng-log/export.h"
+#include "ng-log/log_severity.h"
+#include "ng-log/types.h"
+#include "stacktrace.h"
+
+// There are three different ways we can try to get the stack trace:
+//
+// 1) The libunwind library.  This is still in development, and as a
+//    separate library adds a new dependency, but doesn't need a frame
+//    pointer.  It also doesn't call malloc.
+//
+// 2) Our hand-coded stack-unwinder.  This depends on a certain stack
+//    layout, which is used by gcc (and those systems using a
+//    gcc-compatible ABI) on x86 systems, at least since gcc 2.95.
+//    It uses the frame pointer to do its work.
+//
+// 3) The gdb unwinder -- also the one used by the c++ exception code.
+//    It's obviously well-tested, but has a fatal flaw: it can call
+//    malloc() from the unwinder.  This is a problem because we're
+//    trying to use the unwinder to instrument malloc().
+//
+// 4) The Windows API CaptureStackTrace.
+//
+// Note: if you add a new implementation here, make sure it works
+// correctly when GetStackTrace() is called with max_depth == 0.
+// Some code may do that.
+
+#ifndef ARRAYSIZE
+// There is a better way, but this is good enough for our purpose.
+#  define ARRAYSIZE(a) (sizeof(a) / sizeof(*(a)))
+#endif
+
+namespace nglog {
+
+namespace internal {
+
+struct CrashReason {
+  CrashReason() = default;
+
+  const char* filename{nullptr};
+  int line_number{0};
+  const char* message{nullptr};
+
+  // We'll also store a bit of stack trace context at the time of crash as
+  // it may not be available later on.
+  void* stack[kMaxStackDumpFrames];
+  int depth{0};
+};
+
+std::intmax_t SafeWrite(int fd, const void* data, std::size_t size) noexcept;
+
+}  // namespace internal
+
+inline namespace tools {
+
+void AlsoErrorWrite(LogSeverity severity, const char* tag, const char* message,
+                    std::size_t message_length) noexcept;
+
+void SetThreadName(const char* name);
+
+std::string MakeLogFilename(const std::string& base_filename,
+                            const std::string& time_pid_string,
+                            const std::string& filename_extension,
+                            bool timestamp_in_logfile_name);
+
+std::regex MakeLogFilenameMatcher(const std::string& base_filename,
+                                  const std::string& filename_extension,
+                                  bool timestamp_in_logfile_name);
+
+std::string TrimTrailingCRLF(std::string message);
+
+std::string TrimTrailingCharacters(std::string input, const char* characters,
+                                   std::size_t character_count);
+
+template <std::size_t N>
+inline std::string TrimTrailingCharacters(std::string input,
+                                          const char (&characters)[N]) {
+  static_assert(N > 0, "characters must not be empty");
+  const std::size_t character_count = N - (characters[N - 1] == '\0' ? 1 : 0);
+  return TrimTrailingCharacters(std::move(input), characters, character_count);
+}
+
+const char* ProgramInvocationShortName();
+
+int32 GetMainThreadPid();
+bool PidHasChanged();
+
+const std::string& MyUserName();
+
+// Get the part of filepath after the last path separator.
+// (Doesn't modify filepath, contrary to basename() in libgen.h.)
+const char* const_basename(const char* filepath);
+
+void SetCrashReason(const internal::CrashReason* r);
+
+void InitializeLoggingUtilities(const char* argv0);
+void ShutdownLoggingUtilities();
+
+template <class Functor>
+class ScopedExit final {
+ public:
+  template <class F, std::enable_if_t<
+                         std::is_constructible<Functor, F&&>::value>* = nullptr>
+  constexpr explicit ScopedExit(F&& functor) noexcept(
+      std::is_nothrow_constructible<Functor, F&&>::value)
+      : functor_{std::forward<F>(functor)} {}
+  ~ScopedExit() noexcept(noexcept(std::declval<Functor&>()())) { functor_(); }
+  ScopedExit(const ScopedExit& other) = delete;
+  ScopedExit& operator=(const ScopedExit& other) = delete;
+  ScopedExit(ScopedExit&& other) noexcept = delete;
+  ScopedExit& operator=(ScopedExit&& other) noexcept = delete;
+
+ private:
+  Functor functor_;
+};
+
+// Thin wrapper around a file descriptor so that the file descriptor
+// gets closed for sure.
+class NGLOG_NO_EXPORT FileDescriptor final {
+  static constexpr int InvalidHandle = -1;
+
+ public:
+  constexpr FileDescriptor() noexcept : FileDescriptor{nullptr} {}
+  constexpr explicit FileDescriptor(int fd) noexcept : fd_{fd} {}
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  constexpr FileDescriptor(std::nullptr_t) noexcept : fd_{InvalidHandle} {}
+
+  FileDescriptor(const FileDescriptor& other) = delete;
+  FileDescriptor& operator=(const FileDescriptor& other) = delete;
+
+  FileDescriptor(FileDescriptor&& other) noexcept : fd_{other.release()} {}
+  FileDescriptor& operator=(FileDescriptor&& other) noexcept {
+    // Close the file descriptor being held and assign a new file descriptor
+    // previously held by 'other' without closing it.
+    reset(other.release());
+    return *this;
+  }
+
+  constexpr explicit operator bool() const noexcept {
+    return fd_ != InvalidHandle;
+  }
+
+  constexpr int get() const noexcept { return fd_; }
+
+  int release() noexcept {
+    // +InvalidHandle rather than InvalidHandle: std::exchange's second
+    // parameter is a forwarding reference, so passing the static
+    // constexpr member directly would bind a reference to it, an
+    // odr-use that requires an out-of-class definition. Unary plus
+    // turns it into a prvalue copy instead.
+    return std::exchange(fd_, +InvalidHandle);
+  }
+  void reset(std::nullptr_t) noexcept { safe_close(); }
+  void reset() noexcept { reset(nullptr); }
+  void reset(int fd) noexcept {
+    reset();
+    fd_ = fd;
+  }
+
+  int close() noexcept { return unsafe_close(); }
+
+  ~FileDescriptor() { safe_close(); }
+
+ private:
+  int unsafe_close() noexcept { return ::close(release()); }
+  void safe_close() noexcept {
+    if (*this) {
+      unsafe_close();
+    }
+  }
+
+  int fd_;
+};
+
+// Provide variants of (in)equality comparison operators to avoid constructing
+// temporaries.
+
+constexpr bool operator==(const FileDescriptor& lhs, int rhs) noexcept {
+  return lhs.get() == rhs;
+}
+
+constexpr bool operator==(int lhs, const FileDescriptor& rhs) noexcept {
+  return rhs == lhs;
+}
+
+constexpr bool operator!=(const FileDescriptor& lhs, int rhs) noexcept {
+  return !(lhs == rhs);
+}
+
+constexpr bool operator!=(int lhs, const FileDescriptor& rhs) noexcept {
+  return !(lhs == rhs);
+}
+
+constexpr bool operator==(const FileDescriptor& lhs, std::nullptr_t) noexcept {
+  return !lhs;
+}
+
+constexpr bool operator==(std::nullptr_t, const FileDescriptor& rhs) noexcept {
+  return !rhs;
+}
+
+constexpr bool operator!=(const FileDescriptor& lhs, std::nullptr_t) noexcept {
+  return static_cast<bool>(lhs);
+}
+
+constexpr bool operator!=(std::nullptr_t, const FileDescriptor& rhs) noexcept {
+  return static_cast<bool>(rhs);
+}
+
+}  // namespace tools
+
+void DumpStackFrameInfo(const char* prefix, void* pc);
+// Writes kStackDumpCutOffMarker to the same sink as DumpStackFrameInfo().
+void DumpStackCutOffMarker();
+
+}  // namespace nglog
+
+template <>
+struct std::default_delete<std::FILE> {
+  void operator()(FILE* p) const noexcept { fclose(p); }
+};
+
+#endif  // NGLOG_INTERNAL_UTILITIES_H

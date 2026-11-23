@@ -1,0 +1,102 @@
+/* SPDX-FileCopyrightText: 2008-2024 Google Inc.
+ * SPDX-FileCopyrightText: 2026 The ng-log contributors
+ *
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * ---
+ * Author: Craig Silverstein
+ * Copied from google-perftools and modified by Shinichiro Hamaji
+ *
+ * These are some portability typedefs and defines to make it a bit
+ * easier to compile this code under VC++.
+ *
+ * Several of these are taken from glib:
+ *    http://developer.gnome.org/doc/API/glib/glib-windows-compatability-functions.html
+ */
+
+#ifndef CTEMPLATE_WINDOWS_PORT_H_
+#define CTEMPLATE_WINDOWS_PORT_H_
+
+#include "config.h"
+#include "ng-log/export.h"
+
+#ifdef _WIN32
+
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN /* We always want minimal includes */
+#  endif
+
+#  include <direct.h>  /* for _getcwd() */
+#  include <io.h>      /* because we so often use open/close/etc */
+#  include <process.h> /* for _getpid() */
+#  include <windows.h>
+#  include <winsock.h> /* for gethostname */
+
+#  include <cstdarg> /* template_dictionary.cc uses va_copy */
+#  include <cstdint>
+#  include <cstring> /* for _strnicmp(), strerror_s() */
+#  include <ctime>   /* for localtime_s() */
+#  include <string>
+/* Note: the C++ #includes are all together at the bottom.  This file is
+ * used by both C and C++ code, so we put all the C++ together.
+ */
+
+#  ifdef _MSC_VER
+
+/* 4244: otherwise we get problems when substracting two size_t's to an int
+ * 4251: it's complaining about a private struct I've chosen not to dllexport
+ * 4355: we use this in a constructor, but we do it safely
+ * 4715: for some reason VC++ stopped realizing you can't return after abort()
+ * 4800: we know we're casting ints/char*'s to bools, and we're ok with that
+ * 4996: Yes, we're ok using "unsafe" functions like fopen() and strerror()
+ * 4312: Converting uint32_t to a pointer when testing %p
+ * 4267: also subtracting two size_t to int
+ * 4722: Destructor never returns due to abort()
+ */
+#    pragma warning(disable : 4244 4251 4355 4715 4800 4996 4267 4312 4722)
+
+/* file I/O */
+#    define popen _popen
+#    define pclose _pclose
+#    define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+
+#    define O_WRONLY _O_WRONLY
+#    define O_CREAT _O_CREAT
+#    define O_EXCL _O_EXCL
+
+#    define S_IRUSR S_IREAD
+#    define S_IWUSR S_IWRITE
+
+#    define strcasecmp _stricmp
+
+/* In windows-land, hash<> is called hash_compare<> (from xhash.h) */
+/* VC11 provides std::hash */
+#    if defined(_MSC_VER) && (_MSC_VER < 1700)
+#      define hash hash_compare
+#    endif
+
+#  endif  // _MSC_VER
+
+namespace nglog {
+inline namespace tools {
+NGLOG_EXPORT std::string FormatWindowsMessage(std::uint32_t error);
+
+#  ifndef HAVE_LOCALTIME_R
+NGLOG_NO_EXPORT std::tm* localtime_r(const std::time_t* timep, std::tm* result);
+#  endif  // not HAVE_LOCALTIME_R
+
+#  ifndef HAVE_GMTIME_R
+NGLOG_NO_EXPORT std::tm* gmtime_r(const std::time_t* timep, std::tm* result);
+#  endif  // not HAVE_GMTIME_R
+
+NGLOG_NO_EXPORT
+inline char* strerror_r(int errnum, char* buf, std::size_t buflen) {
+  strerror_s(buf, buflen, errnum);
+  return buf;
+}
+}  // namespace tools
+}  // namespace nglog
+
+#endif /* _WIN32 */
+
+#endif /* CTEMPLATE_WINDOWS_PORT_H_ */

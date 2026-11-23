@@ -1,0 +1,113 @@
+// SPDX-FileCopyrightText: 2007-2024 Google Inc.
+// SPDX-FileCopyrightText: 2026 The ng-log contributors
+//
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// Author: Craig Silverstein
+//
+// Produce a stack trace.  I'm guessing (hoping!) the code is much like
+// for x86.  For apple machines, at least, it seems to be; see
+//    http://developer.apple.com/documentation/mac/runtimehtml/RTArch-59.html
+//    http://www.linux-foundation.org/spec/ELF/ppc64/PPC-elf64abi-1.9.html#STACK
+// Linux has similar code: http://patchwork.ozlabs.org/linuxppc/patch?id=8882
+
+#include <cstdint>  // for uintptr_t
+#include <cstdio>
+
+#include "stacktrace.h"
+
+namespace nglog {
+inline namespace tools {
+
+// Given a pointer to a stack frame, locate and return the calling
+// stackframe, or return nullptr if no stackframe can be found. Perform sanity
+// checks (the strictness of which is controlled by the boolean parameter
+// "STRICT_UNWINDING") to reduce the chance that a bad pointer is returned.
+template <bool STRICT_UNWINDING>
+static void** NextStackFrame(void** old_sp) {
+  void** new_sp = static_cast<void**>(*old_sp);
+
+  // Check that the transition from frame pointer old_sp to frame
+  // pointer new_sp isn't clearly bogus
+  if (STRICT_UNWINDING) {
+    // With the stack growing downwards, older stack frame must be
+    // at a greater address that the current one.
+    if (new_sp <= old_sp) return nullptr;
+    // Assume stack frames larger than 100,000 bytes are bogus.
+    if ((uintptr_t)new_sp - (uintptr_t)old_sp > 100000) return nullptr;
+  } else {
+    // In the non-strict mode, allow discontiguous stack frames.
+    // (alternate-signal-stacks for example).
+    if (new_sp == old_sp) return nullptr;
+    // And allow frames upto about 1MB.
+    if ((new_sp > old_sp) &&
+        ((uintptr_t)new_sp - (uintptr_t)old_sp > 1000000)) {
+      return nullptr;
+    }
+  }
+  if ((uintptr_t)new_sp & (sizeof(void*) - 1)) return nullptr;
+  return new_sp;
+}
+
+// This ensures that GetStackTrace stes up the Link Register properly.
+NGLOG_ATTRIBUTE_NOINLINE
+void StacktracePowerPCDummyFunction();
+void StacktracePowerPCDummyFunction() { __asm__ volatile(""); }
+
+// If you change this function, also change GetStackFrames below.
+int GetStackTrace(void** result, int max_depth, int skip_count) {
+  void** sp;
+  // Apple OS X uses an old version of gnu as -- both Darwin 7.9.0 (Panther)
+  // and Darwin 8.8.1 (Tiger) use as 1.38.  This means we have to use a
+  // different asm syntax.  I don't know quite the best way to discriminate
+  // systems using the old as from the new one; I've gone with __APPLE__.
+#ifdef __APPLE__
+  __asm__ volatile("mr %0,r1" : "=r"(sp));
+#else
+  __asm__ volatile("mr %0,1" : "=r"(sp));
+#endif
+
+  // On PowerPC, the "Link Register" or "Link Record" (LR), is a stack
+  // entry that holds the return address of the subroutine call (what
+  // instruction we run after our function finishes).  This is the
+  // same as the stack-pointer of our parent routine, which is what we
+  // want here.  While the compiler will always(?) set up LR for
+  // subroutine calls, it may not for leaf functions (such as this one).
+  // This routine forces the compiler (at least gcc) to push it anyway.
+  StacktracePowerPCDummyFunction();
+
+  // The LR save area is used by the callee, so the top entry is bogus.
+  skip_count++;
+
+  int n = 0;
+  while (sp && n < max_depth) {
+    if (skip_count > 0) {
+      skip_count--;
+    } else {
+      // PowerPC has 3 main ABIs, which say where in the stack the
+      // Link Register is.  For DARWIN and AIX (used by apple and
+      // linux ppc64), it's in sp[2].  For SYSV (used by linux ppc),
+      // it's in sp[1].
+#if defined(_CALL_AIX) || defined(_CALL_DARWIN)
+      result[n++] = *(sp + 2);
+#elif defined(_CALL_SYSV)
+      result[n++] = *(sp + 1);
+#elif defined(__APPLE__) || \
+    ((defined(__linux) || defined(__linux__)) && defined(__PPC64__))
+      // This check is in case the compiler doesn't define _CALL_AIX/etc.
+      result[n++] = *(sp + 2);
+#elif defined(__linux) || defined(__OpenBSD__)
+      // This check is in case the compiler doesn't define _CALL_SYSV.
+      result[n++] = *(sp + 1);
+#else
+#  error Need to specify the PPC ABI for your architecture.
+#endif
+    }
+    // Use strict unwinding rules.
+    sp = NextStackFrame<true>(sp);
+  }
+  return n;
+}
+
+}  // namespace tools
+}  // namespace nglog

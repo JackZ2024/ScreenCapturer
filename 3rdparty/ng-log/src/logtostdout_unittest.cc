@@ -1,0 +1,87 @@
+// SPDX-FileCopyrightText: 2026 The ng-log contributors
+//
+// SPDX-License-Identifier: BSD-3-Clause
+//
+// Author: Tejas Anil Nagmote
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <cstdint>
+#include <cstdio>
+#include <ostream>
+#include <string>
+
+#include "ng-log/flags.h"
+#include "ng-log/logging.h"
+#include "testing_utilities.h"
+
+using namespace nglog;
+
+namespace {
+
+constexpr char kInfoMessage[] = "buffered info message";
+constexpr char kWarningMessage[] = "unbuffered warning message";
+
+}  // namespace
+
+// With stdout fully buffered, a message whose severity
+// exceeds --logbuflevel must be flushed by ng-log itself instead of lingering
+// in the stdio buffer.
+//
+// This covers the uncolored exit of ColoredWriteToStderrOrStdout(). The
+// colored exit cannot be covered from here: it is only reached when
+// LogDestination::terminal_supports_color() is true, and that is a namespace
+// scope static initialized from TERM before main() runs, so the test cannot
+// select it. Where it is reached, the Windows branch flushes unconditionally
+// anyway, so only the ANSI branch depends on the flush being applied.
+TEST(LogToStdout, HonorsLogbuflevel) {
+  nglog::ScopedFlags<> save;
+
+  std::string after_info;
+  std::string after_warning;
+
+  {
+    ScopedStreamCapture capture{StandardStream::kStdout};
+
+    // stdout now refers to a regular file; make sure it is fully buffered so
+    // that messages which are not explicitly flushed stay in the stdio buffer.
+    setvbuf(stdout, nullptr, _IOFBF, BUFSIZ);
+
+    nglog::SetFlag(FLAGS_logtostdout, true);
+    nglog::SetFlag(FLAGS_colorlogtostdout, false);
+    nglog::SetFlag(FLAGS_logbuflevel, static_cast<std::int32_t>(NGLOG_INFO));
+    // Buffer INFO, flush WARNING and above.
+
+    // Peeking neither flushes nor stops the capture, so it shows whether
+    // ng-log flushed stdout on its own.
+    LOG(INFO) << kInfoMessage;
+    after_info = capture.Peek();
+
+    LOG(WARNING) << kWarningMessage;
+    after_warning = capture.Peek();
+  }
+
+  // INFO does not exceed --logbuflevel, so it stays in the stdio buffer.
+  EXPECT_THAT(after_info, testing::Not(testing::HasSubstr(kInfoMessage)));
+
+  // WARNING does, so it must have been written through. Flushing the stream
+  // also emits everything buffered before it.
+  EXPECT_THAT(after_warning, testing::HasSubstr(kWarningMessage));
+  EXPECT_THAT(after_warning, testing::HasSubstr(kInfoMessage));
+}
+
+int main(int argc, char** argv) {
+  nglog::SetFlag(FLAGS_colorlogtostderr, false);
+
+  // Make sure stderr is not buffered as stderr seems to be buffered
+  // on recent windows.
+  setvbuf(stderr, nullptr, _IONBF, 0);
+
+  testing::InitGoogleTest(&argc, argv);
+
+  nglog::ParseCommandLineFlags(&argc, &argv,
+                               nglog::FlagParsingMode::kRemoveFlags);
+
+  return RUN_ALL_TESTS();
+}

@@ -1,0 +1,257 @@
+// SPDX-FileCopyrightText: 2004-2024 Google Inc.
+// SPDX-FileCopyrightText: 2026 The ng-log contributors
+//
+// SPDX-License-Identifier: BSD-3-Clause
+
+#include "stacktrace.h"
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <memory>
+#include <string>
+
+#include "config.h"
+#include "ng-log/flags.h"
+#include "ng-log/logging.h"
+#include "ng-log/platform.h"
+
+#ifdef HAVE_EXECINFO_BACKTRACE_SYMBOLS
+#  include <execinfo.h>
+#endif
+
+#ifdef HAVE_STACKTRACE
+
+using testing::AllOf;
+using testing::Ge;
+using testing::Le;
+
+// Obtain a backtrace, verify that the expected callers are present in the
+// backtrace, and maybe print the backtrace to stdout.
+
+// The sequence of functions whose return addresses we expect to see in the
+// backtrace.
+const int BACKTRACE_STEPS = 6;
+
+struct AddressRange {
+  const void *start, *end;
+};
+
+// Expected function [start,end] range.
+AddressRange expected_range[BACKTRACE_STEPS];
+
+#  if __GNUC__
+// Using GCC extension: address of a label can be taken with '&&label'.
+// Start should be a label somewhere before recursive call, end somewhere
+// after it. Some compilers can initially assign both labels the same address.
+// The caller's return address extends the range before it is checked.
+#    define NGLOG_INIT_ADDRESS_RANGE(fn, start_label, end_label, prange) \
+      do {                                                               \
+        (prange)->start = &&start_label;                                 \
+        (prange)->end = &&end_label;                                     \
+      } while (0)
+// This macro expands into "unmovable" code (opaque to GCC), and that
+// prevents GCC from moving a_label up or down in the code.
+// Without it, there is no code following the 'end' label, and GCC
+// (4.3.1, 4.4.0) thinks it safe to assign &&end an address that is before
+// the recursive call.
+#    define NGLOG_DECLARE_ADDRESS_LABEL(a_label) \
+    a_label:                                     \
+      do {                                       \
+        __asm__ __volatile__("");                \
+      } while (0)
+// Gcc 4.4.0 may split function into multiple chunks, and the chunk
+// performing recursive call may end up later in the code then the return
+// instruction (this actually happens with FDO).
+// Adjust function range from __builtin_return_address.
+#    define NGLOG_ADJUST_ADDRESS_RANGE_FROM_RA(prange)                       \
+      do {                                                                   \
+        void* ra = __builtin_return_address(0);                              \
+        ASSERT_LT((prange)->start, ra);                                      \
+        if (ra > (prange)->end) {                                            \
+          printf("Adjusting range from %p..%p to %p..%p\n", (prange)->start, \
+                 (prange)->end, (prange)->start, ra);                        \
+          (prange)->end = ra;                                                \
+        }                                                                    \
+      } while (0)
+#  else
+// Assume the Check* functions below are not longer than 256 bytes.
+#    define NGLOG_INIT_ADDRESS_RANGE(fn, start_label, end_label, prange) \
+      do {                                                               \
+        (prange)->start = reinterpret_cast<const void*>(&fn);            \
+        (prange)->end = reinterpret_cast<const char*>(&fn) + 256;        \
+      } while (0)
+#    define NGLOG_DECLARE_ADDRESS_LABEL(a_label) \
+      do {                                       \
+      } while (0)
+#    define NGLOG_ADJUST_ADDRESS_RANGE_FROM_RA(prange) \
+      do {                                             \
+      } while (0)
+#  endif  // __GNUC__
+
+#  if defined(__clang__)
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wgnu-label-as-value"
+#  elif defined(__GNUC__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wpedantic"
+#  endif
+
+NGLOG_ATTRIBUTE_NOINLINE
+void CheckStackTrace(int);
+#  if __GNUC__
+NGLOG_ATTRIBUTE_NOINLINE
+static void* GetReturnAddress() { return __builtin_return_address(0); }
+#  endif
+
+NGLOG_ATTRIBUTE_NOINLINE
+static void CheckStackTraceLeaf() {
+  const int STACK_LEN = 10;
+  void* stack[STACK_LEN];
+  int size;
+
+  NGLOG_ADJUST_ADDRESS_RANGE_FROM_RA(&expected_range[1]);
+#  if __GNUC__
+  union {
+    void (*function)();
+    const void* address;
+  } function_address = {&CheckStackTraceLeaf};
+  expected_range[0].start = function_address.address;
+#  else
+  NGLOG_INIT_ADDRESS_RANGE(CheckStackTraceLeaf, start, end, &expected_range[0]);
+  NGLOG_DECLARE_ADDRESS_LABEL(start);
+#  endif
+  size = nglog::GetStackTrace(stack, STACK_LEN, 0);
+#  if __GNUC__
+  expected_range[0].end = GetReturnAddress();
+#  endif
+  printf("Obtained %d stack frames.\n", size);
+  ASSERT_GE(size, BACKTRACE_STEPS);
+  ASSERT_LE(size, STACK_LEN);
+
+#  ifdef HAVE_EXECINFO_BACKTRACE_SYMBOLS
+  std::unique_ptr<char*, decltype(&std::free)> strings{
+      backtrace_symbols(stack, size), &std::free};
+  for (int i = 0; i < size; ++i) {
+    printf("%s %p\n", strings.get()[i], stack[i]);
+  }
+
+  union {
+    void (*p1)(int);
+    void* p2;
+  } p = {&CheckStackTrace};
+
+  printf("CheckStackTrace() addr: %p\n", p.p2);
+#  endif
+  for (int i = 0; i < BACKTRACE_STEPS; ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_THAT(stack[i],
+                AllOf(Ge(expected_range[i].start), Le(expected_range[i].end)));
+  }
+#  ifndef __GNUC__
+  NGLOG_DECLARE_ADDRESS_LABEL(end);
+#  endif
+}
+
+/* Dummy functions to make the backtrace more interesting. */
+NGLOG_ATTRIBUTE_NOINLINE
+static void CheckStackTrace4(int i) {
+  NGLOG_ADJUST_ADDRESS_RANGE_FROM_RA(&expected_range[2]);
+  NGLOG_INIT_ADDRESS_RANGE(CheckStackTrace4, start, end, &expected_range[1]);
+  NGLOG_DECLARE_ADDRESS_LABEL(start);
+  for (int j = i; j >= 0; j--) {
+    CheckStackTraceLeaf();
+  }
+  NGLOG_DECLARE_ADDRESS_LABEL(end);
+}
+NGLOG_ATTRIBUTE_NOINLINE
+static void CheckStackTrace3(int i) {
+  NGLOG_ADJUST_ADDRESS_RANGE_FROM_RA(&expected_range[3]);
+  NGLOG_INIT_ADDRESS_RANGE(CheckStackTrace3, start, end, &expected_range[2]);
+  NGLOG_DECLARE_ADDRESS_LABEL(start);
+  for (int j = i; j >= 0; j--) {
+    CheckStackTrace4(j);
+  }
+  NGLOG_DECLARE_ADDRESS_LABEL(end);
+}
+NGLOG_ATTRIBUTE_NOINLINE
+static void CheckStackTrace2(int i) {
+  NGLOG_ADJUST_ADDRESS_RANGE_FROM_RA(&expected_range[4]);
+  NGLOG_INIT_ADDRESS_RANGE(CheckStackTrace2, start, end, &expected_range[3]);
+  NGLOG_DECLARE_ADDRESS_LABEL(start);
+  for (int j = i; j >= 0; j--) {
+    CheckStackTrace3(j);
+  }
+  NGLOG_DECLARE_ADDRESS_LABEL(end);
+}
+NGLOG_ATTRIBUTE_NOINLINE
+static void CheckStackTrace1(int i) {
+  NGLOG_ADJUST_ADDRESS_RANGE_FROM_RA(&expected_range[5]);
+  NGLOG_INIT_ADDRESS_RANGE(CheckStackTrace1, start, end, &expected_range[4]);
+  NGLOG_DECLARE_ADDRESS_LABEL(start);
+  for (int j = i; j >= 0; j--) {
+    CheckStackTrace2(j);
+  }
+  NGLOG_DECLARE_ADDRESS_LABEL(end);
+}
+
+#  ifndef __GNUC__
+// On non-GNU environment, we use the address of `CheckStackTrace` to
+// guess the address range of this function. This guess is wrong for
+// non-static function on Windows. This is probably because
+// `&CheckStackTrace` returns the address of a trampoline like PLT,
+// not the actual address of `CheckStackTrace`.
+// See https://github.com/google/glog/issues/421 for the detail.
+#  endif
+NGLOG_ATTRIBUTE_NOINLINE
+#  ifndef __GNUC__
+static
+#  endif
+    void CheckStackTrace(int i) {
+  NGLOG_INIT_ADDRESS_RANGE(CheckStackTrace, start, end, &expected_range[5]);
+  NGLOG_DECLARE_ADDRESS_LABEL(start);
+  for (int j = i; j >= 0; j--) {
+    CheckStackTrace1(j);
+  }
+  NGLOG_DECLARE_ADDRESS_LABEL(end);
+}
+
+#  if defined(__clang__)
+#    pragma clang diagnostic pop
+#  elif defined(__GNUC__)
+#    pragma GCC diagnostic pop
+#  endif
+
+namespace {
+void handle_abort(int /*code*/) { std::exit(EXIT_FAILURE); }
+}  // namespace
+
+TEST(Stacktrace, StackTrace) { CheckStackTrace(0); }
+
+int main(int argc, char** argv) {
+#  if defined(_MSC_VER)
+  // Avoid presenting an interactive dialog that will cause the test to time
+  // out.
+  _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#  endif  // defined(_MSC_VER)
+  std::signal(SIGABRT, handle_abort);
+
+  nglog::SetFlag(FLAGS_logtostderr, true);
+  nglog::InitializeLogging(argv[0]);
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}
+
+#else
+TEST(Stacktrace, Unsupported) {
+  GTEST_SKIP() << "stacktrace support is unavailable";
+}
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}
+#endif  // HAVE_STACKTRACE

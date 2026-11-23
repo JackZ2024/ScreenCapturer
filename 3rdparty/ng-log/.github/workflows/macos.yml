@@ -1,0 +1,94 @@
+# SPDX-FileCopyrightText: 2021-2024 Google Inc.
+# SPDX-FileCopyrightText: 2026 The ng-log contributors
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+name: macOS
+
+on: workflow_call
+
+jobs:
+  build-macos:
+    name: AppleClang-C++${{matrix.std}}-${{matrix.build_type}}
+    runs-on: macos-15
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: true
+      matrix:
+        std: [14, 17, 20, 23]
+        include:
+          - generator: Xcode
+          - build_type: Debug
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Dependencies
+        run: |
+          brew install google-benchmark googletest ninja
+
+      - uses: actions/setup-python@v7
+        if: matrix.build_type == 'Debug'
+        with:
+          python-version: '3.x'
+
+      - name: Setup Coverage Dependencies
+        if: matrix.build_type == 'Debug'
+        run: |
+          pip install -r .github/coverage/requirements.txt
+
+      - name: Setup Environment
+        if: matrix.build_type == 'Debug'
+        run: |
+          echo 'CXXFLAGS=--coverage' >> $GITHUB_ENV
+          echo 'LDFLAGS=--coverage' >> $GITHUB_ENV
+
+      - name: Configure
+        shell: bash
+        env:
+          CXXFLAGS: -Wall -Wextra -Wsign-conversion -Wtautological-compare -Wformat-nonliteral -Wundef -Werror -pedantic-errors ${{env.CXXFLAGS}}
+        run: |
+          cmake -S . -B build_${{matrix.build_type}} \
+                -DCMAKE_CXX_EXTENSIONS=OFF \
+                -DCMAKE_CXX_STANDARD=${{matrix.std}} \
+                -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+                -G "${{matrix.generator}}" \
+                -Werror=author
+
+      - name: Build
+        run: |
+          cmake --build build_${{matrix.build_type}} \
+                --config ${{matrix.build_type}}
+
+      - name: Test
+        run: |
+          ctest --test-dir build_${{matrix.build_type}} \
+                --build-config ${{matrix.build_type}} \
+                --output-on-failure
+
+      - name: Generate Coverage
+        if: matrix.build_type == 'Debug'
+        run: |
+          cd build_${{matrix.build_type}}
+          rm -r Tests/
+          gcovr -r .. . -s --cobertura coverage.xml --json coverage.json
+
+      - name: Upload Coverage to Codecov
+        if: matrix.build_type == 'Debug'
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: build_${{matrix.build_type}}/coverage.xml
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: Archive Coverage
+        if: matrix.build_type == 'Debug'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-macos-cxx${{matrix.std}}
+          path: build_${{matrix.build_type}}/coverage.json
+          retention-days: 1

@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: 2026 The ng-log contributors
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
+name: Lint
+
+on: [push, pull_request]
+
+jobs:
+  reuse:
+    name: REUSE
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check REUSE compliance
+        uses: fsfe/reuse-action@v6
+
+  iwyu:
+    name: IWYU-${{matrix.unwind}}
+    runs-on: ubuntu-latest
+    # Fedora packages a recent IWYU together with the matching Clang.
+    container: fedora:44
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - unwind: libunwind
+            lock_metrics: OFF
+          - unwind: unwind
+            lock_metrics: ON
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Dependencies
+        run: |
+          dnf install -y \
+            clang \
+            cmake \
+            gmock-devel \
+            google-benchmark-devel \
+            gtest-devel \
+            iwyu \
+            libunwind-devel \
+            ninja-build
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            "-DCMAKE_CXX_INCLUDE_WHAT_YOU_USE=include-what-you-use;-Xiwyu;--mapping_file=${GITHUB_WORKSPACE}/cmake/ng-log.imp;-Xiwyu;--no_fwd_decls;-Xiwyu;--error" \
+            -DWITH_LOCK_METRICS=${{matrix.lock_metrics}} \
+            -DWITH_UNWIND=${{matrix.unwind}} \
+            -G Ninja \
+            -Werror=author
+
+      - name: Check Includes
+        run: |
+          cmake --build build
