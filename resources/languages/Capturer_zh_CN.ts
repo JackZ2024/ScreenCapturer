@@ -186,6 +186,7 @@
         <source>About</source>
         <translation>关于</translation>
     </message>
+    <message><source>Check for Updates</source><translation>检查更新</translation></message>
     <message>
         <source>Run on Startup</source>
         <translation>开机自启</translation>
@@ -282,5 +283,27 @@
     <message><source>Delete Annotation</source><translation>删除标注</translation></message>
     <message><source>Transform Image</source><translation>变换图片</translation></message>
     <message><source>Grayscale Image</source><translation>图片转为灰度</translation></message>
+</context>
+<context>
+    <name>UpdatePrompt</name>
+    <message><source>Software Update</source><translation>软件更新</translation></message>
+    <message><source>Version %1 is available. You are using %2.</source><translation>新版本 %1 已发布，当前版本为 %2。</translation></message>
+    <message><source>Update</source><translation>更新</translation></message>
+    <message><source>Updates are unavailable in this build.</source><translation>此构建未配置软件更新。</translation></message>
+    <message><source>No release is available yet.</source><translation>目前还没有正式发布的版本。</translation></message>
+    <message><source>Could not check for updates. Please try again.</source><translation>无法检查更新，请重试。</translation></message>
+    <message><source>The release information is invalid.</source><translation>发布信息无效。</translation></message>
+    <message><source>You are using the latest version.</source><translation>当前已是最新版本。</translation></message>
+    <message><source>Version %1 has no verifiable installer for this computer.</source><translation>版本 %1 没有适用于此电脑且可校验的安装包。</translation></message>
+    <message><source>Could not create a folder for the update.</source><translation>无法创建更新目录。</translation></message>
+    <message><source>Version %1 has no verifiable ZIP package for this computer.</source><translation>版本 %1 没有适用于此电脑且可校验的 ZIP 包。</translation></message>
+    <message><source>Extract an official portable ZIP before using automatic updates.</source><translation>请先解压官方发布的便携版 ZIP，再使用自动更新。</translation></message>
+    <message><source>Could not create the ZIP file.</source><translation>无法创建 ZIP 文件。</translation></message>
+    <message><source>Downloading update…</source><translation>正在下载更新…</translation></message>
+    <message><source>Cancel</source><translation>取消</translation></message>
+    <message><source>The ZIP download or verification failed. Please try again.</source><translation>ZIP 下载或校验失败，请重试。</translation></message>
+    <message><source>Preparing update…</source><translation>正在准备更新…</translation></message>
+    <message><source>Could not prepare the ZIP update.</source><translation>无法准备 ZIP 更新。</translation></message>
+    <message><source>Could not start the update assistant.</source><translation>无法启动更新助手。</translation></message>
 </context>
 </TS>

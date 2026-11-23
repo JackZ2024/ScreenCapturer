@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.14)
 
 add_subdirectory(Main)
+if(WIN32)
+    add_executable(ScreenCapturerUpdater WIN32 updater/ScreenCapturerUpdater.cpp)
+    target_link_libraries(ScreenCapturerUpdater PRIVATE shell32 user32)
+    if(MSVC)
+        set_property(TARGET ScreenCapturerUpdater PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    elseif(MINGW)
+        target_link_options(ScreenCapturerUpdater PRIVATE -municode -static)
+    endif()
+    add_dependencies(ScreenCapturer ScreenCapturerUpdater)
+endif()
 # add_subdirectory(Libcap)
 

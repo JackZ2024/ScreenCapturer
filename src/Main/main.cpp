@@ -1,8 +1,10 @@
 #include "Capturer.h"
 #include "GlobalSettings.h"
+#include "UpdateChecker.h"
 #include "logging.h"
 #include "version.h"
 #include <QTranslator>
+#include <QTimer>
 
 
 int main(int argc, char *argv[])
@@ -27,6 +29,7 @@ int main(int argc, char *argv[])
     Capturer::installTranslator(&translator);
 
     app.Init();
+    QTimer::singleShot(0, &app, [] { update_checker::checkOnStartup(); });
 
     return Capturer::exec();
 }

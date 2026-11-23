@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.14)
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
 
 # NMake/JOM can lose dependencies when localized MSVC /showIncludes output is
 # not parsed correctly. Scan includes with CMake so header edits rebuild all
@@ -7,7 +10,7 @@ if(CMAKE_GENERATOR MATCHES "^NMake Makefiles")
     set(CMAKE_DEPENDS_USE_COMPILER FALSE)
 endif()
 
-project(ScreenCapturer VERSION 1.5 LANGUAGES CXX)
+project(ScreenCapturer VERSION 1.5.0 LANGUAGES CXX)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/app)
 
@@ -64,6 +67,24 @@ set(JSON_BuildTests             OFF CACHE BOOL "Build nlohmann/json tests")
 find_package(QT NAMES Qt6 Qt5 COMPONENTS Core Gui OpenGL Widgets OpenGLWidgets LinguistTools REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Core Gui OpenGL Widgets OpenGLWidgets LinguistTools REQUIRED)
 
+if(WIN32)
+    find_package(Qt6 REQUIRED COMPONENTS Network)
+elseif(APPLE)
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 20)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+    set(SCREENCAPTURER_SPARKLE_FRAMEWORK "" CACHE PATH "Path to Sparkle.framework")
+    set(SCREENCAPTURER_SPARKLE_PUBLIC_KEY "" CACHE STRING "Sparkle EdDSA public key")
+    set(SCREENCAPTURER_MAC_SIGN_IDENTITY "-" CACHE STRING "Identity used to sign the macOS distribution bundle")
+    if(SCREENCAPTURER_SPARKLE_FRAMEWORK OR SCREENCAPTURER_SPARKLE_PUBLIC_KEY)
+        if(NOT EXISTS "${SCREENCAPTURER_SPARKLE_FRAMEWORK}/Sparkle" OR
+           NOT SCREENCAPTURER_SPARKLE_PUBLIC_KEY MATCHES "^[A-Za-z0-9+/]+=$")
+            message(FATAL_ERROR "Set both the Sparkle.framework path and its EdDSA public key")
+        endif()
+        set(SCREENCAPTURER_WITH_SPARKLE ON)
+    endif()
+endif()
+
 # if (WIN32)
 #     # GUI/console
 #     set(CMAKE_WIN32_EXECUTABLE $<IF:$<CONFIG:DEBUG>,OFF,ON>)
@@ -93,6 +114,16 @@ add_subdirectory(3rdparty/ng-log EXCLUDE_FROM_ALL)
 add_subdirectory(src)
 
 if (APPLE)
+find_program(MACDEPLOYQT_EXECUTABLE macdeployqt HINTS "${Qt6_DIR}/../../../bin")
+if(NOT MACDEPLOYQT_EXECUTABLE)
+    message(FATAL_ERROR "macdeployqt was not found. Set MACDEPLOYQT_EXECUTABLE to the Qt tool path.")
+endif()
+
+set(mac_sign_options)
+if(NOT SCREENCAPTURER_MAC_SIGN_IDENTITY STREQUAL "-")
+    list(APPEND mac_sign_options --options runtime --timestamp)
+endif()
+
 add_custom_target(
     buildOSXApp ALL
     DEPENDS ScreenCapturer
@@ -111,7 +142,7 @@ add_custom_command(TARGET buildOSXApp POST_BUILD
 
         # Make output folder
         COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_SOURCE_DIR}/app/Final"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        COMMAND /usr/bin/ditto
             "${CMAKE_SOURCE_DIR}/app/ScreenCapturer.app"
             "${CMAKE_SOURCE_DIR}/app/Final/ScreenCapturer.app"
 
@@ -121,8 +152,9 @@ add_custom_command(TARGET buildOSXApp POST_BUILD
 
         # codesign app
         COMMAND /usr/bin/codesign
-                --deep --force
-                --sign - "${CMAKE_SOURCE_DIR}/app/Final/ScreenCapturer.app"
+                --deep --force ${mac_sign_options}
+                --sign "${SCREENCAPTURER_MAC_SIGN_IDENTITY}" "${CMAKE_SOURCE_DIR}/app/Final/ScreenCapturer.app"
+        VERBATIM
 )
 endif()
 

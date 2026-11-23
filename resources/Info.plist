@@ -41,5 +41,6 @@
 
 	<key>LSUIElement</key>
     	<true/>
+@SPARKLE_PLIST_ENTRIES@
 </dict>
 </plist>

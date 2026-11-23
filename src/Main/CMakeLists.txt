@@ -21,7 +21,7 @@ set(PROJECT_SOURCES
 
 # Add Mac icon
 if (APPLE)
-    FILE(GLOB_RECURSE MAC_SOURCES "*.mm")
+    FILE(GLOB_RECURSE MAC_SOURCES CONFIGURE_DEPENDS "*.mm")
     set(PROJECT_SOURCES
             ${PROJECT_SOURCES}
             ${MAC_SOURCES}
@@ -107,12 +107,39 @@ if (APPLE)
     )
 endif()
 
+if(WIN32)
+    target_link_libraries(${TARGET_NAME} PRIVATE Qt6::Network)
+elseif(SCREENCAPTURER_WITH_SPARKLE)
+    target_compile_definitions(${TARGET_NAME} PRIVATE SCREENCAPTURER_WITH_SPARKLE)
+    set_source_files_properties(MacUpdater.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(${TARGET_NAME} PRIVATE "${SCREENCAPTURER_SPARKLE_FRAMEWORK}")
+    set_property(TARGET ${TARGET_NAME} APPEND PROPERTY BUILD_RPATH "@executable_path/../Frameworks")
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND /usr/bin/ditto "${SCREENCAPTURER_SPARKLE_FRAMEWORK}"
+            "$<TARGET_BUNDLE_DIR:${TARGET_NAME}>/Contents/Frameworks/Sparkle.framework"
+        VERBATIM
+    )
+endif()
+
 if(APPLE)
     # 配置变量
     set(APP_NAME ${TARGET_NAME})
     set(APP_IDENTIFIER "com.jack.${TARGET_NAME}")
     set(APP_VERSION ${PROJECT_VERSION})
-    set(APP_SHORT_VERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
+    set(APP_SHORT_VERSION ${PROJECT_VERSION})
+    if(SCREENCAPTURER_WITH_SPARKLE)
+        set(SPARKLE_PLIST_ENTRIES "
+    <key>SUFeedURL</key>
+    <string>https://github.com/JackZ2024/ScreenCapturer/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>${SCREENCAPTURER_SPARKLE_PUBLIC_KEY}</string>
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
+    <key>SUVerifyUpdateBeforeExtraction</key>
+    <true/>")
+    endif()
 
     # 生成 Info.plist
     configure_file("${CMAKE_SOURCE_DIR}/resources/Info.plist" ${PROJECT_BINARY_DIR}/Info.plist @ONLY)

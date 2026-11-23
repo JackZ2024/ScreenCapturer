@@ -4,6 +4,7 @@
 #include "colorpanel.h"
 #include "combobox.h"
 #include "GlobalSettings.h"
+#include "UpdateChecker.h"
 #include "scrollwidget.h"
 #include "shortcutinput.h"
 #include "version.h"
@@ -12,6 +13,7 @@
 #include <QDir>
 #include <QFormLayout>
 #include <QListWidget>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -286,6 +288,12 @@ QWidget *SettingWindow::setupAboutWidget()
         version->setAlignment(Qt::AlignCenter);
         version->setObjectName("about-version");
         vlayout->addWidget(version);
+
+        const auto checkUpdates = new QPushButton(tr("Check for Updates"), page);
+        connect(checkUpdates, &QPushButton::clicked, this, [this] {
+            update_checker::checkManually(this);
+        });
+        vlayout->addWidget(checkUpdates, 0, Qt::AlignHCenter);
 
         vlayout->addStretch(2);
 
